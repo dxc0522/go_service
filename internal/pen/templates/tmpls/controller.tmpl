@@ -1,0 +1,73 @@
+{{ $op := .OperationDefinition }}package controller
+
+import (
+	"encoding/json"
+	"io/ioutil"
+	"net/http"
+
+	"github.tesla.cn/itapp/lines/appx"
+	"github.tesla.cn/itapp/lines/bizerr"
+	"github.tesla.cn/itapp/lines/errorx"
+	"github.tesla.cn/itapp/lines/runtime"
+	"{{ .AppPackage }}/bizlogic"
+	"{{ .AppPackage }}/model"
+)
+func {{ $op.OperationId }}(reqCtx appx.ReqContext) (interface{}, error) {
+{{range $op.PathParams}}// ------------- Path parameter "{{.ParamName}}" -------------
+    var {{$varName := .GoVariableName}}{{$varName}} {{.TypeDef}}
+{{if .IsPassThrough}}
+    {{$varName}} = reqCtx.Gin().Param("{{.ParamName}}")
+{{end}}
+{{if .IsStyled}}
+    if err := runtime.BindStyledParameter("{{.Style}}",{{.Explode}}, "{{.ParamName}}", reqCtx.Gin().Param("{{.ParamName}}"), &{{$varName}}); err != nil {
+        return nil, bizerr.New(http.StatusBadRequest, err)
+    }
+{{end}}
+{{end}}
+
+{{if (isRequiresParamObject $op)}}
+    // Parameter object where we will unmarshal all parameters from the context
+    var params model.{{ $op.OperationId }}Params
+	{{range $paramIdx, $param := $op.QueryParams}}// ------------- {{if .Required}}Required{{else}}Optional{{end}} query parameter "{{.ParamName}}" -------------
+    {{if .IsStyled}}
+    if err := runtime.BindQueryParameter("{{.Style}}", {{.Explode}}, {{.Required}}, {{.IsPointer}}, "{{.ParamName}}", reqCtx.Gin().Request.URL.Query(), &params.{{.GoName}}); err != nil {
+        return nil, bizerr.New(http.StatusBadRequest, err)
+    }
+    {{else}}
+    if paramValue := reqCtx.Gin().Request.URL.Query()("{{.ParamName}}"); paramValue != "" {
+    {{if .IsPassThrough}}
+    params.{{.GoName}} = {{if not .Required}}&{{end}}paramValue
+    {{end}}
+    }{{if .Required}} else {
+        return bizerr.New(http.StatusBadRequest, "Query argument "+"{{.ParamName}}"+" is required, but not found"))
+    }{{end}}
+    {{end}}
+	{{ end }}
+{{ end }}
+
+{{ if gt (len $op.Bodies) 0}}
+	reqBody, err := ioutil.ReadAll(reqCtx.Gin().Request.Body)
+	if err != nil {
+		return nil, bizerr.New(http.StatusBadRequest, err)
+	}
+	defer reqCtx.Gin().Request.Body.Close()
+{{ if $op.BodyRequired }}
+	var req model.{{ $op | genReqObjectType }}
+	if len(reqBody) > 0 {
+		err := json.Unmarshal(reqBody, &req){{ else }}
+	var req *model.{{ $op | genReqObjectType }}
+	if len(reqBody) > 0 {
+		req = new(model.{{ $op | genReqObjectType }})
+		err := json.Unmarshal(reqBody, req){{ end }}
+		if err != nil {
+			return nil, bizerr.New(http.StatusBadRequest, err)
+		}
+	}
+{{ end }}
+
+	var logic bizlogic.{{ .AppName | camelcase }}BizLogic
+	if err := reqCtx.Find(&logic); err != nil {
+		return nil, errorx.New("can't find bizlogic")
+	}
+	return logic.{{ $op.OperationId }}({{ .PathParams | genParamNamesCustom }}{{ $op | genParamObjectName }}{{ $op | genReqObjectName }})
+}

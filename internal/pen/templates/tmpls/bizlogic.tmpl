@@ -1,0 +1,9 @@
+package bizlogic
+
+import (
+	"{{ .AppPackage }}/model"
+)
+{{ $op := .OperationDefinition }}
+func (l *{{ .AppName | camelcase | lcFirst }}BizLogic) {{ $op.OperationId }}({{ $op.PathParams | genParamArgsCustom }}{{ $op | genParamObject }}{{ $op | genReqObject }}) (interface {}, error) {
+	panic("got some bizlogic here")
+}

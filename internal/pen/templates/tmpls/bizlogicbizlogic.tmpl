@@ -1,0 +1,24 @@
+package bizlogic
+
+import (
+	"github.tesla.cn/itapp/lines/appx"
+	"github.tesla.cn/itapp/lines/errorx"
+	"github.tesla.cn/itapp/lines/logx"
+)
+
+type (
+	{{ .AppName | camelcase | lcFirst }}BizLogic struct {
+		ReqCtx          appx.ReqContext {{ "inject:\"\"" | bquote }}
+		AppCtx          appx.AppContext {{ "inject:\"\"" | bquote }}
+		logx.ReqLogger  {{ "inject:\"\"" | bquote }}
+	}
+)
+
+func MustNew{{ .AppName | camelcase }}BizLogic(reqCtx appx.ReqContext) {{ .AppName | camelcase }}BizLogic {
+	logic := &{{ .AppName | camelcase | lcFirst }}BizLogic{}
+	if err := reqCtx.Apply(logic); err != nil {
+		reqCtx.Error("error when inject logic", "error", errorx.WithStack(err))
+		panic(err)
+	}
+	return logic
+}

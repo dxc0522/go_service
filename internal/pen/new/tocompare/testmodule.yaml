@@ -1,0 +1,52 @@
+openapi: "3.0.2"
+info:
+  version: 1.0.0
+  title: testmodule
+  description: testmodule
+  contact:
+    name: sample
+    email: sample@sample.com
+servers:
+  - url: http://localhost:10086/api/testmodule
+  - url: https://sample.tesla.cn/api/testmodule
+paths:
+  /sample:
+    get:
+      tags: [ "sample" ]
+      summary: Get sample list
+      operationId: getSampleList
+      security:
+        # keep only the needed below
+        - x-required-login: []
+          x-required-roles: [ 'OAS.SampleRole' ]
+          x-required-features: [ 'OAS.SampleFeature' ]
+      responses:
+        '200':
+          description: sample info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sample'
+components:
+  securitySchemes:
+    x-required-login:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    x-required-roles:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    x-required-features:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Sample:
+      allOf:
+        - required: [ "id" ]
+          properties:
+            id:
+              type: string
+            name:
+              type: string

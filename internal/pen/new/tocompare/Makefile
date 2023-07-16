@@ -1,0 +1,36 @@
+ModuleName = testmodule
+
+# generate
+gen-sdk:
+	pen client
+	# pen client $(ModuleName).yaml
+
+gen-structure:
+	pen structure
+	# pen structure -app-package="github.tesla.cn/itapp/benjamin/internal/$(ModuleName)"  $(ModuleName).yaml
+
+gen-migration:
+	pen migration
+	# pen migration -data-source 'root:root@tcp(127.0.0.1)/bjm?collation=utf8_unicode_ci&parseTime=true&loc=UTC' -table-prefix $(ModuleName)_
+
+gen-dbmodel:
+	pen dbmodel
+	# pen dbmodel -sqltype mysql -connstr 'root:root@tcp(127.0.0.1)/bjm?collation=utf8_unicode_ci&parseTime=true&loc=UTC'
+	#    -d bjm -t $(ModuleName)_sometable,$(ModuleName)_anothertable \
+	#    -model=dbmodel -gorm -guregu -overwrite -out ./
+
+
+# others
+mock:
+	prism mock $(ModuleName).yaml
+
+new-migration:
+	cd db/migrations && goose create new sql
+
+gorm:
+	#cd ${GOPATH} && go get github.com/smallnest/gen
+	gen --sqltype mysql \
+		--connstr "root:root@tcp(127.0.0.1)/bjm?collation=utf8_unicode_ci&parseTime=true&loc=UTC" \
+		-d bjm --model=dbmodel --gorm --guregu --overwrite \
+		-t $(ModuleName)_sometable,$(ModuleName)_anothertable \
+ 		--out ./

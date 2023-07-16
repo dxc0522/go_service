@@ -1,0 +1,30 @@
+package controller
+
+import (
+	"net/http"
+
+	"github.tesla.cn/itapp/lines"
+	"github.tesla.cn/itapp/lines/appx"
+	"github.tesla.cn/itapp/lines/constantx"
+)
+
+// GetRoutes returns routes
+func GetRoutes(appCtx appx.AppContext) []lines.Route {
+	return []lines.Route{ {{ range $path, $methods := .Paths }}{{ range $method, $operation := ($methods.Operations) }}
+		{
+			Method:  http.Method{{ $method |  camelcase }},
+			Path:    "{{ $path | toGinPath }}",
+			Handler: {{ $operation.OperationID }},
+			Group:   {{ if not (isInternalRoute $operation.Tags) }}constantx.APIPrefix{{ else }}constantx.InternalPrefix{{ end }}+appCtx.WhoAmI(),{{ if $operation.Security }}{{ with (index $operation.Security 0) }}{{ range $key, $value := . }}{{ if eq $key "x-required-login" }}
+			LoginRequired: true,{{ end }}{{ if eq $key "x-required-roles" }}
+			RolesRequired: []string{
+				{{ range $value }}"{{ . }}",
+				{{ end }}
+			},{{ end }}{{ if eq $key "x-required-features" }}
+			FeaturesRequired: []string{
+				{{ range $value }}"{{ . }}",
+				{{ end }}
+			},{{ end }}{{ end }}{{ end }}{{ end }}
+		},{{ end }}{{ end }}
+	}
+}

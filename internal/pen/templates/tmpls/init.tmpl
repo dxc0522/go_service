@@ -1,0 +1,12 @@
+package {{ .AppName | GoFileName }}
+
+import (
+	"{{ .AppPackage }}/bizlogic"
+	"github.tesla.cn/itapp/lines/appx"
+	"github.tesla.cn/itapp/lines/featurex"
+)
+
+// MustInit{{ .AppName | camelcase }} do some initialize provider here
+func MustInit{{ .AppName | camelcase }}(appCtx appx.AppContext, cl *featurex.ConfigLoader) {
+	appCtx.Provide(bizlogic.MustNew{{ .AppName | camelcase }}BizLogic)
+}

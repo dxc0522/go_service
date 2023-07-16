@@ -1,0 +1,107 @@
+package {{.daoPackageName}}
+
+import (
+    "context"
+
+	"{{.modelFQPN}}"
+
+	"github.com/smallnest/gen/dbmeta"
+)
+
+
+// GetAll{{.StructName}} is a function to get a slice of record(s) from {{.TableName}} table in the {{.DatabaseName}} database
+// params - page     - page requested (defaults to 0)
+// params - pagesize - number of records in a page  (defaults to 20)
+// params - order    - db sort order column
+// error - ErrNotFound, db Find error
+func GetAll{{.StructName}}(ctx context.Context, page, pagesize int64, order string) ({{.StructName | toLower}} []*{{.modelPackageName}}.{{.StructName}}, totalRows int, err error) {
+
+	{{.StructName | toLower}} = []*{{.modelPackageName}}.{{.StructName}}{}
+
+	{{.StructName | toLower}}Orm := DB.Model(&{{.modelPackageName}}.{{.StructName}}{})
+    {{.StructName | toLower}}Orm.Count(&totalRows)
+
+	if page > 0 {
+		offset := (page - 1) * pagesize
+		{{.StructName | toLower}}Orm = {{.StructName | toLower}}Orm.Offset(offset).Limit(pagesize)
+	} else {
+		{{.StructName | toLower}}Orm = {{.StructName | toLower}}Orm.Limit(pagesize)
+    }
+
+	if order != "" {
+		{{.StructName | toLower}}Orm = {{.StructName | toLower}}Orm.Order(order)
+	}
+
+	if err = {{.StructName | toLower}}Orm.Find(&{{.StructName | toLower}}).Error; err != nil {
+	    err = ErrNotFound
+		return nil, -1, err
+	}
+
+	return {{.StructName | toLower}}, totalRows, nil
+}
+
+// Get{{.StructName}} is a function to get a single record from the {{.TableName}} table in the {{.DatabaseName}} database
+// error - ErrNotFound, db Find error
+func Get{{.StructName}}(ctx context.Context, id interface{}) (record *{{.modelPackageName}}.{{.StructName}}, err error) {
+	if err = DB.First(record, id).Error; err != nil {
+	    err = ErrNotFound
+		return nil, err
+	}
+
+	return record, nil
+}
+
+// Add{{.StructName}} is a function to add a single record to {{.TableName}} table in the {{.DatabaseName}} database
+// error - ErrInsertFailed, db save call failed
+func Add{{.StructName}}(ctx context.Context, {{.StructName | toLower}} *{{.modelPackageName}}.{{.StructName}}) (result *{{.modelPackageName}}.{{.StructName}}, RowsAffected int64, err error) {
+    db := DB.Save({{.StructName | toLower}})
+	if err = db.Error; err != nil {
+	    return nil, -1, ErrInsertFailed
+	}
+
+	return {{.StructName | toLower}}, db.RowsAffected, nil
+}
+
+// Update{{.StructName}} is a function to update a single record from {{.TableName}} table in the {{.DatabaseName}} database
+// error - ErrNotFound, db record for id not found
+// error - ErrUpdateFailed, db meta data copy failed or db.Save call failed
+func Update{{.StructName}}(ctx context.Context, id interface{}, updated *{{.modelPackageName}}.{{.StructName}}) (result *{{.modelPackageName}}.{{.StructName}}, RowsAffected int64, err error) {
+
+	result = &{{.modelPackageName}}.{{.StructName}}{}
+   db := DB.First(result, id)
+   if err = db.Error; err != nil {
+      return nil, -1, ErrNotFound
+   }
+
+   if err = dbmeta.Copy(result, updated); err != nil {
+      return nil, -1, ErrUpdateFailed
+      return
+   }
+
+   db = db.Save(result)
+   if err = db.Error; err != nil  {
+      return nil, -1, ErrUpdateFailed
+   }
+
+   return result, db.RowsAffected, nil
+}
+
+// Delete{{.StructName}} is a function to delete a single record from {{.TableName}} table in the {{.DatabaseName}} database
+// error - ErrNotFound, db Find error
+// error - ErrDeleteFailed, db Delete failed error
+func Delete{{.StructName}}(ctx context.Context, id interface{}) (rowsAffected int64, err error) {
+
+    {{.StructName | toLower}} := &{{.modelPackageName}}.{{.StructName}}{}
+    db := DB.First({{.StructName | toLower}}, id)
+    if db.Error != nil {
+        return -1, ErrNotFound
+    }
+
+    db = db.Delete({{.StructName | toLower}})
+    if err = db.Error; err != nil {
+        return -1, ErrDeleteFailed
+    }
+
+   return db.RowsAffected, nil
+}
+

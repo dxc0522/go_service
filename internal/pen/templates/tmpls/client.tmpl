@@ -1,0 +1,494 @@
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.tesla.cn/itapp/lines/appx"
+	"github.tesla.cn/itapp/lines/errorx"
+	"github.tesla.cn/itapp/lines/runtime"
+	"github.tesla.cn/itapp/lines/constantx"
+	"github.tesla.cn/itapp/lines/utilx/textx"
+	"github.tesla.cn/itapp/lines/utilx/tokenx"
+	"github.tesla.cn/itapp/lines/xidx"
+)
+
+// RequestEditorFn  is the function signature for the RequestEditor callback function
+type RequestEditorFn func(ctx context.Context, req *http.Request) error
+
+// Doer performs HTTP requests.
+//
+// The standard http.Client implements this interface.
+type HttpRequestDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// Client which conforms to the OpenAPI3 specification for this service.
+type Client struct {
+	// The endpoint of the server conforming to this interface, with scheme,
+	// https://api.deepmap.com for example. This can contain a path relative
+	// to the server, such as https://api.deepmap.com/dev-test, and all the
+	// paths in the swagger spec will be appended to the server.
+	Server string
+
+	// Doer for performing requests, typically a *http.Client with any
+	// customized settings, such as certificate chains.
+	Client HttpRequestDoer
+
+	// A list of callbacks for modifying requests which are generated before sending over
+	// the network.
+	RequestEditors []RequestEditorFn
+}
+
+// ClientOption allows setting custom parameters during construction
+type ClientOption func(*Client) error
+
+// Creates a new Client, with reasonable defaults
+func NewClient(server string, opts ...ClientOption) (*Client, error) {
+    // create a client with sane default values
+    client := Client{
+        Server: server,
+    }
+    // mutate client and add all optional params
+    for _, o := range opts {
+        if err := o(&client); err != nil {
+            return nil, err
+        }
+    }
+    // ensure the server URL always has a trailing slash
+    if !strings.HasSuffix(client.Server, "/") {
+        client.Server += "/"
+    }
+    // create httpClient, if not already present
+    if client.Client == nil {
+        client.Client = http.DefaultClient
+    }
+
+    client.RequestEditors = append(client.RequestEditors, withSetXidFromRequest, withSetTokenFromRequest)
+
+    // ensure will must occur deep copy on slice in WithRequestEditorFn action later
+    client.RequestEditors = client.RequestEditors[0:len(client.RequestEditors):len(client.RequestEditors)]
+    return &client, nil
+}
+
+// WithHTTPClient allows overriding the default Doer, which is
+// automatically created using http.Client. This is useful for tests.
+func WithHTTPClient(doer HttpRequestDoer) ClientOption {
+	return func(c *Client) error {
+		c.Client = doer
+		return nil
+	}
+}
+
+// WithRequestEditorFn allows setting up a callback function, which will be
+// called right before sending the request. This can be used to mutate the request.
+func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
+	return func(c *Client) error {
+		c.RequestEditors = append(c.RequestEditors, fn)
+
+		// ensure will must occur deep copy on slice in WithRequestEditorFn action later
+		c.RequestEditors = c.RequestEditors[0:len(c.RequestEditors):len(c.RequestEditors)]
+		return nil
+	}
+}
+
+// The interface specification for the client above.
+type ClientInterface interface {
+{{range . -}}
+{{$hasParams := .RequiresParamObject -}}
+{{$pathParams := .PathParams -}}
+{{$opid := .OperationId -}}
+    // {{$opid}} request {{if .HasBody}} with any body{{end}}
+    {{$opid}}{{if .HasBody}}WithBody{{end}}(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}{{if .HasBody}}, contentType string, body io.Reader{{end}}, reqEditors... RequestEditorFn) (*http.Response, error)
+{{range .Bodies}}
+    {{$opid}}{{.Suffix}}(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}, body {{$opid}}{{.NameTag}}RequestBody, reqEditors... RequestEditorFn) (*http.Response, error)
+{{end}}{{/* range .Bodies */}}
+{{end}}{{/* range . $opid := .OperationId */}}
+}
+
+
+{{/* Generate client methods */}}
+{{range . -}}
+{{$hasParams := .RequiresParamObject -}}
+{{$pathParams := .PathParams -}}
+{{$opid := .OperationId -}}
+{{ $tags := .Tags }}
+
+func (c *Client) {{$opid}}{{if .HasBody}}WithBody{{end}}(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}{{if .HasBody}}, contentType string, body io.Reader{{end}}, reqEditors... RequestEditorFn) (*http.Response, error) {
+    req, err := New{{$opid}}Request{{if .HasBody}}WithBody{{end}}(c.Server{{genParamNames .PathParams}}{{if $hasParams}}, params{{end}}{{if .HasBody}}, contentType, body{{end}})
+    if err != nil {
+        return nil, err
+    }
+
+   {{ if (isInternalRoute $tags) }} reqEditors = append(reqEditors, WithChangeToInternalApi) {{ end }}
+
+    if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+        return nil, err
+    }
+    return c.Client.Do(req.Clone(ctx))
+}
+
+{{range .Bodies}}
+func (c *Client) {{$opid}}{{.Suffix}}(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}, body {{$opid}}{{.NameTag}}RequestBody, reqEditors... RequestEditorFn) (*http.Response, error) {
+    req, err := New{{$opid}}{{.Suffix}}Request(c.Server{{genParamNames $pathParams}}{{if $hasParams}}, params{{end}}, body)
+    if err != nil {
+        return nil, err
+    }
+
+    {{ if (isInternalRoute $tags) }} reqEditors = append(reqEditors, WithChangeToInternalApi) {{ end }}
+
+    if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+        return nil, err
+    }
+    return c.Client.Do(req.Clone(ctx))
+}
+{{end}}{{/* range .Bodies */}}
+{{end}}
+
+{{/* Generate request builders */}}
+{{range .}}
+{{$hasParams := .RequiresParamObject -}}
+{{$pathParams := .PathParams -}}
+{{$bodyRequired := .BodyRequired -}}
+{{$opid := .OperationId -}}
+
+{{range .Bodies}}
+// New{{$opid}}Request{{.Suffix}} calls the generic {{$opid}} builder with {{.ContentType}} body
+func New{{$opid}}Request{{.Suffix}}(server string{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}, body {{$opid}}{{.NameTag}}RequestBody) (*http.Request, error) {
+    var bodyReader io.Reader
+    buf, err := json.Marshal(body)
+    if err != nil {
+        return nil, err
+    }
+    bodyReader = bytes.NewReader(buf)
+    return New{{$opid}}RequestWithBody(server{{genParamNames $pathParams}}{{if $hasParams}}, params{{end}}, "{{.ContentType}}", bodyReader)
+}
+{{end}}
+
+// New{{$opid}}Request{{if .HasBody}}WithBody{{end}} generates requests for {{$opid}}{{if .HasBody}} with any type of body{{end}}
+func New{{$opid}}Request{{if .HasBody}}WithBody{{end}}(server string{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}{{if .HasBody}}, contentType string, body io.Reader{{end}}) (*http.Request, error) {
+    var err error
+{{range $paramIdx, $param := .PathParams}}
+    {{if .IsPassThrough}}
+    pathParam{{$paramIdx}} := {{.ParamName}}
+    {{end}}
+    {{if .IsJson}}
+    var pathParamBuf{{$paramIdx}} []byte
+    pathParamBuf{{$paramIdx}}, err = json.Marshal({{.ParamName}})
+    if err != nil {
+        return nil, err
+    }
+    pathParam{{$paramIdx}} := string(pathParamBuf{{$paramIdx}})
+    {{end}}
+    {{if .IsStyled}}
+    pathParam{{$paramIdx}} := fmt.Sprintf("%v", {{.GoVariableName}})
+    {{ else }}
+    var pathParam{{$paramIdx}} string
+    {{end}}
+{{end}}
+    queryUrl, err := url.Parse(server)
+    if err != nil {
+        return nil, err
+    }
+
+	{{ if eq (len .PathParams) 0 }}
+    basePath := "{{genParamFmtString .Path}}"
+    {{ else }}
+    basePath := fmt.Sprintf("{{genParamFmtString .Path}}"{{range $paramIdx, $param := .PathParams}}, pathParam{{$paramIdx}}{{end}})
+    {{ end }}
+    if basePath[0] == '/' {
+        basePath = basePath[1:]
+    }
+
+    queryUrl, err = queryUrl.Parse(basePath)
+    if err != nil {
+        return nil, err
+    }
+{{if .QueryParams}}
+    queryValues := queryUrl.Query()
+{{range $paramIdx, $param := .QueryParams}}
+    {{if not .Required}} if params.{{.GoName}} != nil { {{end}}
+    {{if .IsPassThrough}}
+    queryValues.Add("{{.ParamName}}", {{if .IsPointer}}*{{end}}params.{{.GoName}})
+    {{end}}
+    {{if .IsJson}}
+    if queryParamBuf, err := json.Marshal({{if .IsPointer}}*{{end}}params.{{.GoName}}); err != nil {
+        return nil, err
+    } else {
+        queryValues.Add("{{.ParamName}}", string(queryParamBuf))
+    }
+
+    {{end}}
+    {{if .IsStyled}}
+    if queryFrag, err := runtime.StyleParam("{{.Style}}", {{.Explode}}, "{{.ParamName}}", {{if .IsPointer}}*{{end}}params.{{.GoName}}); err != nil {
+        return nil, err
+    } else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+       return nil, err
+    } else {
+       for k, v := range parsed {
+           for _, v2 := range v {
+               queryValues.Add(k, v2)
+           }
+       }
+    }
+    {{end}}
+    {{if not .Required}}}{{end}}
+{{end}}
+    queryUrl.RawQuery = queryValues.Encode()
+{{end}}{{/* if .QueryParams */}}
+    req, err := http.NewRequest("{{.Method}}", queryUrl.String(), {{if .HasBody}}body{{else}}nil{{end}})
+    if err != nil {
+        return nil, err
+    }
+
+    {{if .HasBody}}req.Header.Add("Content-Type", contentType){{end}}
+{{range $paramIdx, $param := .HeaderParams}}
+    {{if not .Required}} if params.{{.GoName}} != nil { {{end}}
+    var headerParam{{$paramIdx}} string
+    {{if .IsPassThrough}}
+    headerParam{{$paramIdx}} = {{if .IsPointer}}*{{end}}params.{{.GoName}}
+    {{end}}
+    {{if .IsJson}}
+    var headerParamBuf{{$paramIdx}} []byte
+    headerParamBuf{{$paramIdx}}, err = json.Marshal({{if .IsPointer}}*{{end}}params.{{.GoName}})
+    if err != nil {
+        return nil, err
+    }
+    headerParam{{$paramIdx}} = string(headerParamBuf{{$paramIdx}})
+    {{end}}
+    {{if .IsStyled}}
+    headerParam{{$paramIdx}}, err = runtime.StyleParam("{{.Style}}", {{.Explode}}, "{{.ParamName}}", {{if .IsPointer}}*{{end}}params.{{.GoName}})
+    if err != nil {
+        return nil, err
+    }
+    {{end}}
+    req.Header.Set("{{.ParamName}}", headerParam{{$paramIdx}})
+    {{if not .Required}}}{{end}}
+{{end}}
+
+{{range $paramIdx, $param := .CookieParams}}
+    {{if not .Required}} if params.{{.GoName}} != nil { {{end}}
+    var cookieParam{{$paramIdx}} string
+    {{if .IsPassThrough}}
+    cookieParam{{$paramIdx}} = {{if .IsPointer}}*{{end}}params.{{.GoName}}
+    {{end}}
+    {{if .IsJson}}
+    var cookieParamBuf{{$paramIdx}} []byte
+    cookieParamBuf{{$paramIdx}}, err = json.Marshal({{if .IsPointer}}*{{end}}params.{{.GoName}})
+    if err != nil {
+        return nil, err
+    }
+    cookieParam{{$paramIdx}} = url.QueryEscape(string(cookieParamBuf{{$paramIdx}}))
+    {{end}}
+    {{if .IsStyled}}
+    cookieParam{{$paramIdx}}, err = runtime.StyleParam("simple", {{.Explode}}, "{{.ParamName}}", {{if .IsPointer}}*{{end}}params.{{.GoName}})
+    if err != nil {
+        return nil, err
+    }
+    {{end}}
+    cookie{{$paramIdx}} := &http.Cookie{
+        Name:"{{.ParamName}}",
+        Value:cookieParam{{$paramIdx}},
+    }
+    req.AddCookie(cookie{{$paramIdx}})
+    {{if not .Required}}}{{end}}
+{{end}}
+    return req, nil
+}
+
+{{end}}{{/* Range */}}
+
+func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
+    for _, r := range c.RequestEditors {
+        if err := r(ctx, req); err != nil {
+            return err
+        }
+    }
+    for _, r := range additionalEditors {
+        if err := r(ctx, req); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+// ClientWithResponses builds on ClientInterface to offer response payloads
+type ClientWithResponses struct {
+    ClientInterface
+}
+
+// NewClientWithResponses creates a new ClientWithResponses, which wraps
+// Client with return type handling
+func NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithResponses, error) {
+    client, err := NewClient(server, opts...)
+    if err != nil {
+        return nil, err
+    }
+    return &ClientWithResponses{client}, nil
+}
+
+// WithBaseURL overrides the baseURL.
+func WithBaseURL(baseURL string) ClientOption {
+	return func(c *Client) error {
+		newBaseURL, err := url.Parse(baseURL)
+		if err != nil {
+			return err
+		}
+		c.Server = newBaseURL.String()
+		return nil
+	}
+}
+
+// WithChangeToInternalApi is a RequestEditorFn
+func WithChangeToInternalApi(ctx context.Context, req *http.Request) error {
+	if strings.HasPrefix(req.URL.Path, constantx.APIPrefix) {
+		req.URL.Path = strings.Replace(req.URL.Path, constantx.APIPrefix, constantx.InternalPrefix, 1)
+	}
+
+	return nil
+}
+
+// withSetXidFromRequest is a RequestEditorFn to set xid in header
+func withSetXidFromRequest(ctx context.Context, req *http.Request) error {
+	var xid string
+	if v, ok := ctx.(appx.ReqContext); ok {
+		xid = v.GetXid()
+	}
+	if !textx.Blank(xid) {
+		req.Header.Set(xidx.HeaderXid, xid)
+	}
+
+	return nil
+}
+
+// withSetTokenFromRequest is a RequestEditorFn to set Authorization in header
+func withSetTokenFromRequest(ctx context.Context, req *http.Request) error {
+	var token string
+	if v, ok := ctx.(appx.ReqContext); ok {
+		token = tokenx.GetToken(v)
+	}
+	if !textx.Blank(token) {
+		req.Header.Set(tokenx.HEADERAuthorization, fmt.Sprintf("%s %s", tokenx.HEADERBearer, token))
+	}
+	return nil
+}
+
+func (cwr ClientWithResponses) ExtendWithOptions(opts ...ClientOption) ClientWithResponsesInterface {
+	client, ok := cwr.ClientInterface.(*Client)
+	if !ok {
+		panic("can't extend client")
+	}
+
+	newClient := &Client{
+		Server:         client.Server,
+		Client:         client.Client,
+		RequestEditors: client.RequestEditors,
+	}
+	for _, o := range opts {
+		if err := o(newClient); err != nil {
+			panic(errorx.Wrap(err, "can't apply option"))
+		}
+	}
+	return &ClientWithResponses{newClient}
+}
+
+// ClientWithResponsesInterface is the interface specification for the client with responses above.
+type ClientWithResponsesInterface interface {
+	ExtendWithOptions(options ...ClientOption) ClientWithResponsesInterface
+{{range . -}}
+{{$hasParams := .RequiresParamObject -}}
+{{$pathParams := .PathParams -}}
+{{$opid := .OperationId -}}
+    // {{$opid}} request {{if .HasBody}} with any body{{end}}
+    {{$opid}}{{if .HasBody}}WithBody{{end}}WithResponse(ctx context.Context{{genParamArgs .PathParams}}{{if .RequiresParamObject}}, params *{{$opid}}Params{{end}}{{if .HasBody}}, contentType string, body io.Reader{{end}}) (*{{genResponseTypeName $opid}}, error)
+{{range .Bodies}}
+    {{$opid}}{{.Suffix}}WithResponse(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}, body {{$opid}}{{.NameTag}}RequestBody) (*{{genResponseTypeName $opid}}, error)
+{{end}}{{/* range .Bodies */}}
+{{end}}{{/* range . $opid := .OperationId */}}
+}
+
+{{range .}}{{$opid := .OperationId}}{{$op := .}}
+type {{$opid | ucFirst}}RespByPen struct {
+    Body         []byte
+	HTTPResponse *http.Response
+    {{- range getResponseTypeDefinitions .}}
+    {{.TypeName}} *{{.Schema.TypeDecl}}
+    {{- end}}
+}
+
+// Status returns HTTPResponse.Status
+func (r {{$opid | ucFirst}}RespByPen) Status() string {
+    if r.HTTPResponse != nil {
+        return r.HTTPResponse.Status
+    }
+    return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r {{$opid | ucFirst}}RespByPen) StatusCode() int {
+    if r.HTTPResponse != nil {
+        return r.HTTPResponse.StatusCode
+    }
+    return 0
+}
+
+// GetBody returns HTTPResponse payload
+func (r {{$opid | ucFirst}}RespByPen) GetBody() []byte {
+    if r.HTTPResponse != nil {
+        return r.Body
+    }
+    return nil
+}
+{{end}}
+
+
+{{range .}}
+{{$opid := .OperationId -}}
+{{/* Generate client methods (with responses)*/}}
+
+// {{$opid}}{{if .HasBody}}WithBody{{end}}WithResponse request{{if .HasBody}} with arbitrary body{{end}} returning *{{$opid}}RespByPen
+func (c *ClientWithResponses) {{$opid}}{{if .HasBody}}WithBody{{end}}WithResponse(ctx context.Context{{genParamArgs .PathParams}}{{if .RequiresParamObject}}, params *{{$opid}}Params{{end}}{{if .HasBody}}, contentType string, body io.Reader{{end}}) (*{{genResponseTypeName $opid}}, error){
+    rsp, err := c.{{$opid}}{{if .HasBody}}WithBody{{end}}(ctx{{genParamNames .PathParams}}{{if .RequiresParamObject}}, params{{end}}{{if .HasBody}}, contentType, body{{end}})
+    if err != nil {
+        return nil, err
+    }
+    return Parse{{genResponseTypeName $opid | ucFirst}}(rsp)
+}
+
+{{$hasParams := .RequiresParamObject -}}
+{{$pathParams := .PathParams -}}
+{{$bodyRequired := .BodyRequired -}}
+{{range .Bodies}}
+func (c *ClientWithResponses) {{$opid}}{{.Suffix}}WithResponse(ctx context.Context{{genParamArgs $pathParams}}{{if $hasParams}}, params *{{$opid}}Params{{end}}, body {{$opid}}{{.NameTag}}RequestBody) (*{{genResponseTypeName $opid}}, error) {
+    rsp, err := c.{{$opid}}{{.Suffix}}(ctx{{genParamNames $pathParams}}{{if $hasParams}}, params{{end}}, body)
+    if err != nil {
+        return nil, err
+    }
+    return Parse{{genResponseTypeName $opid | ucFirst}}(rsp)
+}
+{{end}}
+
+{{end}}{{/* operations */}}
+
+{{/* Generate parse functions for responses*/}}
+{{range .}}{{$opid := .OperationId}}
+
+// Parse{{genResponseTypeName $opid | ucFirst}} parses an HTTP response from a {{$opid}}WithResponse call
+func Parse{{genResponseTypeName $opid | ucFirst}}(rsp *http.Response) (*{{genResponseTypeName $opid}}, error) {
+    bodyBytes, err := ioutil.ReadAll(rsp.Body)
+    defer rsp.Body.Close()
+    if err != nil {
+        return nil, err
+    }
+
+    response := {{genResponsePayload $opid}}
+
+    {{genResponseUnmarshal .}}
+
+    return response, nil
+}
+{{end}}{{/* range . $opid := .OperationId */}}

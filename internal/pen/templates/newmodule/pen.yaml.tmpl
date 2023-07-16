@@ -1,0 +1,23 @@
+# refresh pen : cd ${GOPATH}/src/github.com/go_service/internal/pen && go install .
+# refresh gen : cd ${GOPATH} && go get github.com/smallnest/gen
+
+# yaml
+src-yaml: {{ .ModuleName }}.yaml
+
+# flags
+app-name:
+app-package:
+target-dir:
+data-source: root:root@tcp(127.0.0.1)/bjm?collation=utf8_unicode_ci&parseTime=true&loc=UTC
+table-prefix:  {{ .ModuleName }}_
+
+# for gen dbmodel
+sqltype: "mysql"
+connstr: "root:root@tcp(127.0.0.1)/bjm?collation=utf8_unicode_ci&parseTime=true&loc=UTC"
+database: "bjm"
+tables:  {{ .ModuleName }}_one_table,{{ .ModuleName }}_another_table
+model: "dbmodel"
+gorm: true
+guregu: true
+overwrite: true
+out: "./"

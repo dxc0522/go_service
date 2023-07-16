@@ -1,0 +1,25 @@
+package main
+
+import (
+	"github.tesla.cn/itapp/lines"
+	"{{ .AppPackage }}"
+	"{{ .AppPackage }}/controller"
+)
+
+func main() {
+	appCtx := lines.InitApp()
+
+	if _, err := appCtx.Invoke({{ .AppName | GoFileName }}.MustInit{{ .AppName | camelcase }}); err != nil {
+		appCtx.Fatal(err.Error())
+	}
+
+	routes := controller.GetRoutes(appCtx)
+	if _, err := appCtx.Invoke(lines.SetupHttpServer(routes)); err != nil {
+		appCtx.Fatal(err.Error())
+	}
+
+	appCtx.GetReady()
+	if _, err := appCtx.Invoke(lines.StartServer); err != nil {
+		appCtx.Fatal(err.Error())
+	}
+}

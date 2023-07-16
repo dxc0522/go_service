@@ -1,0 +1,13 @@
+package bizlogic
+
+import (
+	"{{ .AppPackage }}/model"
+)
+
+type (
+	{{ .AppName | camelcase }}BizLogic interface { {{range .OperationDefinitions}}
+		{{ .SummaryAsComment }}
+        // ({{ .Method }} {{ .Path | toGinPath }})
+        {{ .OperationId }}({{ .PathParams | genParamArgsCustom }}{{ . | genParamObject }}{{ . | genReqObject }}) (interface {}, error){{end}}
+	}
+)

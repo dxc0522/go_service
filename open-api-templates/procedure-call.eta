@@ -1,0 +1,84 @@
+<%
+const { apiConfig, utils, route, config } = it;
+const { servers } = apiConfig;
+const { requestBodyInfo, responseBodyInfo, specificArgNameResolver } = route;
+const { _, getInlineParseContent, getParseContent, parseSchema, getComponentByRef, require } = utils;
+const { parameters, path, method, payload, query, formData, security, requestParams } = route.request;
+const { type, errorType, contentTypes } = route.response;
+const { HTTP_CLIENT, RESERVED_REQ_PARAMS_ARG_NAMES } = config.constants;
+const routeDocs = includeFile("@base/route-docs", { config, route, utils });
+const queryName = (query && query.name) || "query";
+const pathParams = _.values(parameters);
+const pathParamsNames = _.map(pathParams, "name");
+const server = (servers && servers[0]) || { url: "" };
+const basePath = server.url.replace(/http[s]?:\/\/[a-zA-Z0-9.-]+(:[0-9]+)?/, '');
+const interfaceMapObj = {}
+
+const argToTmpl = ({ name, optional, type, defaultValue }) => {
+    if (type.startsWith('{')) {
+        const interfaceName = `${route.routeName.usage.replace(route.routeName.usage[0], route.routeName.usage[0].toUpperCase())}${name.replace(name[0], name[0].toUpperCase())}Params`; 
+        interfaceMapObj[interfaceName] = `${type}${defaultValue ? ` = ${defaultValue}` : ''}`;
+        return `${name}${!defaultValue && optional ? '?' : ''}: ${interfaceName}`;
+    }
+    return `${name}${!defaultValue && optional ? '?' : ''}: ${type}${defaultValue ? ` = ${defaultValue}` : ''}`;
+};
+
+const rawWrapperArgs = config.extractRequestParams ?
+    _.compact([
+        requestParams && {
+          name: pathParams.length ? `{ ${_.join(pathParamsNames, ", ")}, ...${queryName} }` : queryName,
+          optional: false,
+          type: getInlineParseContent(requestParams),
+        },
+        ...(!requestParams ? pathParams : []),
+        payload,
+    ]) :
+    _.compact([
+        ...pathParams,
+        query,
+        payload,
+    ])
+
+let wrapperArgs = _
+    // Sort by optionality
+    .sortBy(rawWrapperArgs, [o => o.optional])
+    .map(argToTmpl)
+    .join(', ')
+
+
+const bodyTmpl = _.get(payload, "name") || null;
+const queryTmpl = (query != null && queryName) || null;
+%>
+
+<% wrapperArgs.split(',').forEach((wrapperArg) => { %>
+
+<% 
+if (!wrapperArg) {
+    return;
+}
+const wrapperArgType = wrapperArg.substr(wrapperArg.indexOf(':') + 2);
+const wrapperArgkey = wrapperArg.substring(0, wrapperArg.indexOf(':')).replace('?', '').trim();
+const interfaceName = `${route.routeName.usage.replace(route.routeName.usage[0], route.routeName.usage[0].toUpperCase())}${wrapperArgkey.replace(wrapperArgkey[0], wrapperArgkey[0].toUpperCase())}Params`; 
+%>
+
+<% if (wrapperArgkey && wrapperArgType.endsWith(`${wrapperArgkey.replace(wrapperArgkey[0], wrapperArgkey[0].toUpperCase())}Params`)) { %>
+export interface <%~ interfaceName %> <%~ interfaceMapObj[interfaceName] %>
+<% } %>
+
+<% }) %>
+
+/**
+<%~ routeDocs.description %>
+
+ * <% /* Here you can add some other JSDoc tags */ %>
+
+<%~ routeDocs.lines %>
+
+ */
+export const <%~ route.routeName.usage %>Api = (<%~ basePath.startsWith('/flowable-ui') ? 'modulePath: string, ' : '' %><%~ wrapperArgs %>) =>
+    axiosInstance.request<<%~ type %>>({
+        url: `<%~ basePath.startsWith("/flowable-ui") ? '${modulePath}' : basePath %><%~ path %>`,
+        method: '<%~ _.upperCase(method) %>',
+        <%~ queryTmpl ? `params: ${queryTmpl},` : '' %>
+        <%~ bodyTmpl ? `data: ${bodyTmpl},` : '' %>
+    });

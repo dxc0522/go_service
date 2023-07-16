@@ -1,0 +1,17 @@
+FROM china-devops-docker-local.arf.tesla.cn/base-images/lerna:14.17-alpine-openapi
+
+WORKDIR /usr/src/app
+
+ARG USERNAME=ac-sdkag-gab-220503
+ARG PASSWORD=dummy
+ENV GFSH_SDK_PASS $PASSWORD
+
+COPY .git ./.git
+COPY internal ./internal
+COPY vendor ./vendor
+COPY web/open-api-templates ./web/open-api-templates
+COPY generate-ts.sh ./
+
+RUN chmod 777 generate-ts.sh
+RUN bash generate-ts.sh
+
